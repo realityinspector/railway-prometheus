@@ -5,6 +5,7 @@ global:
   # external systems (federation, remote storage, Alertmanager).
   external_labels:
     monitor: 'railway-prom'
+    environment: '${ENVIRONMENT:-live}' # Default to live if not specified
 
 # A scrape configuration containing exactly one endpoint to scrape:
 # Here it's Prometheus itself.
@@ -22,6 +23,22 @@ scrape_configs:
     scrape_interval: 5s
     static_configs:
       - targets: ['demo.do.prometheus.io:9090']
+
+  - job_name: 'fastapi_metrics'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['${MAIN_FASTAPI_URL}']
+    metrics_path: '/metrics'
+    scheme: 'http'
+
+  - job_name: 'test_data_metrics'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['${DATABASE_ORCHESTRATOR_URL}']
+    metrics_path: '/metrics'
+    scheme: 'http'
+    params:
+      environment: ['test']
 
   # - job_name: 'postgres'
   #   scrape_interval: 5s

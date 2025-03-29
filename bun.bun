@@ -1,0 +1,681 @@
+// HTTP server for health checks and metrics
+Bun.serve({
+  port: parseInt(Bun.env.PORT || "3000"),
+  fetch: async (req) => {
+    try {
+      // Get security config for request handling
+      const securityConfig = orchestrator.getSecurityConfig();
+
+      // CORS handling
+      if (securityConfig.enableCors) {
+        // Handle preflight requests
+        if (req.method === "OPTIONS") {
+          return new Response(null, {
+            status: 204,
+            headers: getCorsHeaders(req, securityConfig),
+          });
+        }
+      }
+
+      // Parse URL and path
+      const url = new URL(req.url);
+      const path = url.pathname;
+
+      // Check authentication for protected routes
+      if (
+        securityConfig.enableAuth &&
+        path !== "/health" &&
+        path !== "/healthz"
+      ) {
+        const authHeader = req.headers.get("Authorization");
+        const apiKey = securityConfig.apiKey;
+
+        if (
+          !authHeader ||
+          !authHeader.startsWith("Bearer ") ||
+          authHeader.slice(7) !== apiKey
+        ) {
+          return new Response("Unauthorized", {
+            status: 401,
+            headers: securityConfig.enableCors
+              ? getCorsHeaders(req, securityConfig)
+              : undefined,
+          });
+        }
+      }
+
+      // Basic routing
+      if (req.method === "GET") {
+        // Health check endpoint
+        if (path === "/health" || path === "/healthz") {
+          const metrics = orchestrator.getMetrics();
+          const isHealthy = metrics.redisConnected && metrics.postgresConnected;
+
+          return new Response(
+            JSON.stringify({
+              status: isHealthy ? "healthy" : "degraded",
+              redis: {
+                connected: metrics.redisConnected,
+                latency: `${metrics.redisLatencyMs}ms`,
+              },
+              postgres: {
+                connected: metrics.postgresConnected,
+                latency: `${metrics.postgresLatencyMs}ms`,
+              },
+              timestamp: new Date().toISOString(),
+            }),
+            {
+              status: isHealthy ? 200 : 503,
+              headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache, no-store",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            }
+          );
+        }
+
+        // Metrics endpoint
+        if (path === "/metrics") {
+          return new Response(
+            JSON.stringify(orchestrator.getMetrics(), null, 2),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache, no-store",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            }
+          );
+        }
+
+        // Security config endpoint (for development/debugging)
+        if (
+          path === "/security-info" &&
+          Bun.env.ENVIRONMENT === "development"
+        ) {
+          // Only expose non-sensitive info
+          return new Response(
+            JSON.stringify({
+              enableAuth: securityConfig.enableAuth,
+              enableCors: securityConfig.enableCors,
+              allowedOrigins: securityConfig.allowedOrigins,
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            }
+          );
+        }
+      }
+
+      // Execute database operations
+      if (req.method === "POST") {
+        if (path.startsWith("/execute/")) {
+          const operationType = path.slice("/execute/".length);
+
+          // Parse the request body
+          const body = await req.json();
+
+          // Handle different operation types
+          if (operationType === "pg_query") {
+            const { query, params } = body.data || {};
+            if (!query) {
+              return new Response(
+                JSON.stringify({ error: "Missing query parameter" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            // Execute the query
+            const result = await orchestrator.executePostgresQuery(
+              async (client) => {
+                const queryResult = await client.query(query, params || []);
+                return queryResult.rows;
+              },
+              {
+                operationName: body.options?.operationName || "api_pg_query",
+                timeoutMs: body.options?.timeoutMs || 10000,
+                maxRetries: body.options?.maxRetries || 3,
+              }
+            );
+
+            return new Response(JSON.stringify(result), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            });
+          }
+
+          if (operationType === "pg_transaction") {
+            const { queries } = body.data || {};
+            if (!queries || !Array.isArray(queries)) {
+              return new Response(
+                JSON.stringify({ error: "Missing or invalid queries array" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            // Execute the transaction
+            const results = await orchestrator.executePostgresQuery(
+              async (client) => {
+                // Start transaction
+                await client.query("BEGIN");
+
+                try {
+                  // Execute each query in the transaction
+                  const queryResults = [];
+                  for (const { query, params } of queries) {
+                    const result = await client.query(query, params || []);
+                    queryResults.push(result.rows);
+                  }
+
+                  // Commit transaction
+                  await client.query("COMMIT");
+                  return queryResults;
+                } catch (error) {
+                  // Rollback on error
+                  await client.query("ROLLBACK");
+                  throw error;
+                }
+              },
+              {
+                operationName:
+                  body.options?.operationName || "api_pg_transaction",
+                timeoutMs: body.options?.timeoutMs || 30000,
+                maxRetries: body.options?.maxRetries || 3,
+              }
+            );
+
+            return new Response(JSON.stringify(results), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            });
+          }
+
+          // Redis operations
+          if (operationType === "redis_get") {
+            const { key } = body.data || {};
+            if (!key) {
+              return new Response(
+                JSON.stringify({ error: "Missing key parameter" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            // Execute Redis get
+            const result = await orchestrator.executeRedisCommand(
+              async () => {
+                const value = await orchestrator.redisClient.get(key);
+                // Try to parse JSON if possible
+                if (value) {
+                  try {
+                    return JSON.parse(value);
+                  } catch (e) {
+                    return value;
+                  }
+                }
+                return null;
+              },
+              {
+                operationName: `redis_get:${key}`,
+                timeoutMs: body.options?.timeoutMs || 5000,
+                maxRetries: body.options?.maxRetries || 3,
+              }
+            );
+
+            return new Response(JSON.stringify(result), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            });
+          }
+
+          if (operationType === "redis_set") {
+            const { key, value } = body.data || {};
+            const { expiry } = body.options || {};
+
+            if (!key || value === undefined) {
+              return new Response(
+                JSON.stringify({ error: "Missing key or value parameter" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            // Execute Redis set
+            const result = await orchestrator.executeRedisCommand(
+              async () => {
+                // Convert objects to JSON strings
+                const valueToStore =
+                  typeof value === "object"
+                    ? JSON.stringify(value)
+                    : String(value);
+
+                // Set with optional expiry
+                if (expiry) {
+                  return await orchestrator.redisClient.set(
+                    key,
+                    valueToStore,
+                    "EX",
+                    expiry
+                  );
+                } else {
+                  return await orchestrator.redisClient.set(key, valueToStore);
+                }
+              },
+              {
+                operationName: `redis_set:${key}`,
+                timeoutMs: body.options?.timeoutMs || 5000,
+                maxRetries: body.options?.maxRetries || 3,
+              }
+            );
+
+            return new Response(JSON.stringify(result === "OK"), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            });
+          }
+
+          if (operationType === "redis_del") {
+            const { key } = body.data || {};
+
+            if (!key) {
+              return new Response(
+                JSON.stringify({ error: "Missing key parameter" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            // Execute Redis del
+            const result = await orchestrator.executeRedisCommand(
+              async () => {
+                return await orchestrator.redisClient.del(key);
+              },
+              {
+                operationName: `redis_del:${key}`,
+                timeoutMs: body.options?.timeoutMs || 5000,
+                maxRetries: body.options?.maxRetries || 3,
+              }
+            );
+
+            return new Response(JSON.stringify(result > 0), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            });
+          }
+
+          // Pattern-based Redis operations
+          if (operationType === "redis_keys") {
+            const { pattern } = body.data || {};
+
+            if (!pattern) {
+              return new Response(
+                JSON.stringify({ error: "Missing pattern parameter" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            // Execute Redis keys
+            const result = await orchestrator.executeRedisCommand(
+              async () => {
+                return await orchestrator.redisClient.keys(pattern);
+              },
+              {
+                operationName: `redis_keys:${pattern}`,
+                timeoutMs: body.options?.timeoutMs || 5000,
+                maxRetries: body.options?.maxRetries || 3,
+              }
+            );
+
+            return new Response(JSON.stringify(result), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            });
+          }
+
+          // Custom Redis command
+          if (operationType === "redis_exec") {
+            const { command, args } = body.data || {};
+
+            if (!command) {
+              return new Response(
+                JSON.stringify({ error: "Missing command parameter" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            // Execute custom Redis command
+            const result = await orchestrator.executeRedisCommand(
+              async () => {
+                // @ts-ignore - Dynamically call Redis command
+                return await orchestrator.redisClient[command](...(args || []));
+              },
+              {
+                operationName: `redis_exec:${command}`,
+                timeoutMs: body.options?.timeoutMs || 5000,
+                maxRetries: body.options?.maxRetries || 3,
+              }
+            );
+
+            return new Response(JSON.stringify(result), {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...(securityConfig.enableCors
+                  ? getCorsHeaders(req, securityConfig)
+                  : {}),
+              },
+            });
+          }
+
+          // Migrations endpoint
+          if (operationType === "migrations") {
+            const { action, migrationFiles } = body.data || {};
+
+            if (!action) {
+              return new Response(
+                JSON.stringify({ error: "Missing action parameter" }),
+                {
+                  status: 400,
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(securityConfig.enableCors
+                      ? getCorsHeaders(req, securityConfig)
+                      : {}),
+                  },
+                }
+              );
+            }
+
+            if (action === "run" && migrationFiles) {
+              // Execute migrations
+              const results = await orchestrator.executePostgresQuery(
+                async (client) => {
+                  // First ensure migrations table exists
+                  await client.query(`
+                    CREATE TABLE IF NOT EXISTS migrations (
+                      id SERIAL PRIMARY KEY,
+                      migration_id VARCHAR(255) UNIQUE NOT NULL,
+                      filename VARCHAR(255) NOT NULL,
+                      applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                      checksum VARCHAR(64) NOT NULL,
+                      success BOOLEAN NOT NULL
+                    );
+                  `);
+
+                  // Get already applied migrations
+                  const appliedResult = await client.query(
+                    "SELECT migration_id FROM migrations WHERE success = TRUE"
+                  );
+                  const appliedMigrations = appliedResult.rows.map(
+                    (row) => row.migration_id
+                  );
+
+                  // Apply each migration in a separate transaction
+                  const migrationResults = [];
+
+                  for (const migration of migrationFiles) {
+                    const { id, filename, content, checksum } = migration;
+
+                    // Skip if already applied
+                    if (appliedMigrations.includes(id)) {
+                      migrationResults.push({
+                        id,
+                        filename,
+                        status: "skipped",
+                        message: "Already applied",
+                      });
+                      continue;
+                    }
+
+                    // Start transaction for this migration
+                    await client.query("BEGIN");
+
+                    try {
+                      // Execute migration SQL
+                      await client.query(content);
+
+                      // Record successful migration
+                      await client.query(
+                        `INSERT INTO migrations 
+                         (migration_id, filename, applied_at, checksum, success) 
+                         VALUES ($1, $2, NOW(), $3, TRUE)`,
+                        [id, filename, checksum]
+                      );
+
+                      // Commit transaction
+                      await client.query("COMMIT");
+
+                      migrationResults.push({
+                        id,
+                        filename,
+                        status: "success",
+                        message: "Applied successfully",
+                      });
+                    } catch (error) {
+                      // Rollback transaction
+                      await client.query("ROLLBACK");
+
+                      // Record failed migration
+                      await client.query(
+                        `INSERT INTO migrations 
+                         (migration_id, filename, applied_at, checksum, success) 
+                         VALUES ($1, $2, NOW(), $3, FALSE)`,
+                        [id, filename, checksum]
+                      );
+
+                      migrationResults.push({
+                        id,
+                        filename,
+                        status: "error",
+                        message:
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                      });
+
+                      // Stop processing further migrations
+                      break;
+                    }
+                  }
+
+                  return {
+                    applied: appliedMigrations,
+                    results: migrationResults,
+                  };
+                },
+                {
+                  operationName: "run_migrations",
+                  timeoutMs: 60000, // Longer timeout for migrations
+                  maxRetries: 0, // No retries for migrations
+                }
+              );
+
+              return new Response(JSON.stringify(results), {
+                status: 200,
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(securityConfig.enableCors
+                    ? getCorsHeaders(req, securityConfig)
+                    : {}),
+                },
+              });
+            }
+
+            if (action === "status") {
+              // Check migration status
+              const status = await orchestrator.executePostgresQuery(
+                async (client) => {
+                  // First ensure migrations table exists
+                  try {
+                    await client.query(`
+                      CREATE TABLE IF NOT EXISTS migrations (
+                        id SERIAL PRIMARY KEY,
+                        migration_id VARCHAR(255) UNIQUE NOT NULL,
+                        filename VARCHAR(255) NOT NULL,
+                        applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        checksum VARCHAR(64) NOT NULL,
+                        success BOOLEAN NOT NULL
+                      );
+                    `);
+                  } catch (e) {
+                    return {
+                      error: "Failed to create migrations table",
+                      message: e instanceof Error ? e.message : String(e),
+                    };
+                  }
+
+                  // Get applied migrations
+                  const result = await client.query(
+                    "SELECT migration_id, filename, applied_at, checksum, success FROM migrations ORDER BY id"
+                  );
+
+                  return {
+                    total: result.rows.length,
+                    succeeded: result.rows.filter((row) => row.success).length,
+                    failed: result.rows.filter((row) => !row.success).length,
+                    migrations: result.rows,
+                  };
+                },
+                {
+                  operationName: "check_migration_status",
+                  timeoutMs: 10000,
+                  maxRetries: 1,
+                }
+              );
+
+              return new Response(JSON.stringify(status), {
+                status: 200,
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(securityConfig.enableCors
+                    ? getCorsHeaders(req, securityConfig)
+                    : {}),
+                },
+              });
+            }
+          }
+        }
+      }
+
+      // Default 404 for unhandled routes
+      return new Response("Not Found", {
+        status: 404,
+        headers: securityConfig.enableCors
+          ? getCorsHeaders(req, securityConfig)
+          : undefined,
+      });
+    } catch (error) {
+      console.error("HTTP server error:", error);
+      return new Response(
+        JSON.stringify({
+          error: "Internal server error",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            ...(orchestrator.getSecurityConfig().enableCors
+              ? getCorsHeaders(req, orchestrator.getSecurityConfig())
+              : {}),
+          },
+        }
+      );
+    }
+  },
+});
