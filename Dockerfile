@@ -3,6 +3,10 @@ FROM prom/prometheus
 # copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
 
+# create web config file with basic auth
+RUN mkdir -p /etc/prometheus/web
+COPY web.yml /etc/prometheus/web/web.yml
+
 # expose the Prometheus server port
 EXPOSE 9090
 
@@ -15,5 +19,6 @@ CMD        [ "--config.file=/etc/prometheus/prometheus.yml", \
              "--web.console.libraries=/usr/share/prometheus/console_libraries", \
              "--web.console.templates=/usr/share/prometheus/consoles", \
              "--web.external-url=http://localhost:9090", \
+             "--web.config.file=/etc/prometheus/web/web.yml", \
              "--log.level=info"]
  
