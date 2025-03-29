@@ -1,14 +1,6 @@
-FROM prom/prometheus
+FROM node:18-alpine as builder
 
-# Install Node.js, npm, and other dependencies
-USER root
-RUN apk add --no-cache \
-    nodejs \
-    npm \
-    chrony \
-    curl
-
-# Set up the app directory
+# Set up the app directory for building
 WORKDIR /app
 COPY package*.json ./
 COPY test_data_manager.js ./
@@ -18,6 +10,16 @@ COPY manage_test_data.js ./
 # Install dependencies
 RUN npm install
 
+FROM prom/prometheus
+
+# Copy node and npm from node image
+COPY --from=node:18-alpine /usr/local/bin/node /usr/local/bin/
+COPY --from=node:18-alpine /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+
+# Copy our app from builder
+COPY --from=builder /app /app
+
 # copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
 
@@ -25,8 +27,10 @@ COPY prometheus.yml /etc/prometheus/prometheus.yml
 RUN mkdir -p /etc/prometheus/web
 COPY web.yml /etc/prometheus/web/web.yml
 
-# Configure chrony
-RUN echo "pool pool.ntp.org iburst" > /etc/chrony/chrony.conf && \
+# Install chrony for time sync
+USER root
+RUN mkdir -p /etc/chrony && \
+    echo "pool pool.ntp.org iburst" > /etc/chrony/chrony.conf && \
     echo "makestep 1.0 3" >> /etc/chrony/chrony.conf && \
     echo "rtcsync" >> /etc/chrony/chrony.conf
 
@@ -36,8 +40,10 @@ EXPOSE 9090
 # Create startup script
 COPY <<EOF /start.sh
 #!/bin/sh
-# Start chronyd in the background
-chronyd
+# Start chronyd in the background if it exists
+if command -v chronyd >/dev/null 2>&1; then
+    chronyd
+fi
 
 # Check if we're running a test data command
 if [ "$1" = "seed" ]; then
