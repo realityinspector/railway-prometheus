@@ -3,12 +3,12 @@ FROM node:18-alpine as builder
 # Set up the app directory for building
 WORKDIR /app
 COPY package*.json ./
+RUN npm install
+
+# Copy application files
 COPY test_data_manager.js ./
 COPY database_orchestrator.js ./
 COPY manage_test_data.js ./
-
-# Install dependencies
-RUN npm install
 
 FROM prom/prometheus
 
@@ -38,41 +38,38 @@ RUN mkdir -p /etc/chrony && \
 EXPOSE 9090
 
 # Create startup script
-COPY <<EOF /start.sh
-#!/bin/sh
-# Start chronyd in the background if it exists
-if command -v chronyd >/dev/null 2>&1; then
-    chronyd
-fi
-
-# Check if we're running a test data command
-if [ "$1" = "seed" ]; then
-    node /app/manage_test_data.js seed
-    exit $?
-elif [ "$1" = "update" ]; then
-    node /app/manage_test_data.js update
-    exit $?
-elif [ "$1" = "rollback" ]; then
-    node /app/manage_test_data.js rollback
-    exit $?
-elif [ "$1" = "status" ]; then
-    node /app/manage_test_data.js status
-    exit $?
-fi
-
-# Start Prometheus by default
-exec /bin/prometheus \
-  --config.file=/etc/prometheus/prometheus.yml \
-  --storage.tsdb.path=/prometheus \
-  --storage.tsdb.retention.time=365d \
-  --web.console.libraries=/usr/share/prometheus/console_libraries \
-  --web.console.templates=/usr/share/prometheus/consoles \
-  --web.external-url=http://localhost:9090 \
-  --web.config.file=/etc/prometheus/web/web.yml \
-  --log.level=info
-EOF
-
-RUN chmod +x /start.sh
+RUN echo '#!/bin/sh' > /start.sh && \
+    echo '# Start chronyd in the background if it exists' >> /start.sh && \
+    echo 'if command -v chronyd >/dev/null 2>&1; then' >> /start.sh && \
+    echo '    chronyd' >> /start.sh && \
+    echo 'fi' >> /start.sh && \
+    echo '' >> /start.sh && \
+    echo '# Check if we are running a test data command' >> /start.sh && \
+    echo 'if [ "$1" = "seed" ]; then' >> /start.sh && \
+    echo '    node /app/manage_test_data.js seed' >> /start.sh && \
+    echo '    exit $?' >> /start.sh && \
+    echo 'elif [ "$1" = "update" ]; then' >> /start.sh && \
+    echo '    node /app/manage_test_data.js update' >> /start.sh && \
+    echo '    exit $?' >> /start.sh && \
+    echo 'elif [ "$1" = "rollback" ]; then' >> /start.sh && \
+    echo '    node /app/manage_test_data.js rollback' >> /start.sh && \
+    echo '    exit $?' >> /start.sh && \
+    echo 'elif [ "$1" = "status" ]; then' >> /start.sh && \
+    echo '    node /app/manage_test_data.js status' >> /start.sh && \
+    echo '    exit $?' >> /start.sh && \
+    echo 'fi' >> /start.sh && \
+    echo '' >> /start.sh && \
+    echo '# Start Prometheus by default' >> /start.sh && \
+    echo 'exec /bin/prometheus \\' >> /start.sh && \
+    echo '  --config.file=/etc/prometheus/prometheus.yml \\' >> /start.sh && \
+    echo '  --storage.tsdb.path=/prometheus \\' >> /start.sh && \
+    echo '  --storage.tsdb.retention.time=365d \\' >> /start.sh && \
+    echo '  --web.console.libraries=/usr/share/prometheus/console_libraries \\' >> /start.sh && \
+    echo '  --web.console.templates=/usr/share/prometheus/consoles \\' >> /start.sh && \
+    echo '  --web.external-url=http://localhost:9090 \\' >> /start.sh && \
+    echo '  --web.config.file=/etc/prometheus/web/web.yml \\' >> /start.sh && \
+    echo '  --log.level=info' >> /start.sh && \
+    chmod +x /start.sh
 
 # Set the entrypoint to our startup script
 ENTRYPOINT ["/start.sh"]
