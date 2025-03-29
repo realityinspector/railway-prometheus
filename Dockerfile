@@ -2,12 +2,11 @@ FROM prom/prometheus
 
 # Install Node.js, npm, and other dependencies
 USER root
-RUN apt-get update && \
-    apt-get install -y chrony curl && \
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache \
+    nodejs \
+    npm \
+    chrony \
+    curl
 
 # Set up the app directory
 WORKDIR /app
