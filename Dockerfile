@@ -12,10 +12,13 @@ COPY manage_test_data.js ./
 
 FROM prom/prometheus
 
-# Copy node and npm from node image
-COPY --from=node:18-alpine /usr/local/bin/node /usr/local/bin/
-COPY --from=node:18-alpine /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+# Set up Node.js environment
+USER root
+COPY --from=builder /usr/local/bin/node /usr/local/bin/
+COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN mkdir -p /usr/local/bin && \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    chmod +x /usr/local/bin/npm
 
 # Copy our app from builder
 COPY --from=builder /app /app
@@ -28,7 +31,6 @@ RUN mkdir -p /etc/prometheus/web
 COPY web.yml /etc/prometheus/web/web.yml
 
 # Install chrony for time sync
-USER root
 RUN mkdir -p /etc/chrony && \
     echo "pool pool.ntp.org iburst" > /etc/chrony/chrony.conf && \
     echo "makestep 1.0 3" >> /etc/chrony/chrony.conf && \
@@ -37,7 +39,7 @@ RUN mkdir -p /etc/chrony && \
 # expose the Prometheus server port
 EXPOSE 9090
 
-# Create startup script
+# Create startup script with proper permissions
 RUN echo '#!/bin/sh' > /start.sh && \
     echo '# Start chronyd in the background if it exists' >> /start.sh && \
     echo 'if command -v chronyd >/dev/null 2>&1; then' >> /start.sh && \
