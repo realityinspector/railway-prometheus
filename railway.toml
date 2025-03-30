@@ -3,27 +3,26 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "start"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 
 [[commands]]
 name = "seed"
-command = "start seed"
+command = "/start.sh seed"
 description = "Seed test data"
 
 [[commands]]
 name = "update"
-command = "start update"
+command = "/start.sh update"
 description = "Update test data"
 
 [[commands]]
 name = "rollback"
-command = "start rollback"
+command = "/start.sh rollback"
 description = "Rollback test data"
 
 [[commands]]
 name = "status"
-command = "start status"
+command = "/start.sh status"
 description = "Check test data status"
 
