@@ -1,85 +1,38 @@
-FROM node:18-alpine as builder
-
-# Set up the app directory for building 
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-
-# Copy application files
-COPY test_data_manager.js ./
-COPY database_orchestrator.js ./
-COPY manage_test_data.js ./
-
 FROM prom/prometheus
 
-# Set up Node.js environment
+# Install apache2-utils for htpasswd
 USER root
-COPY --from=builder /usr/local/bin/node /usr/local/bin/
-COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN mkdir -p /usr/local/bin && \
-    ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
-    chmod +x /usr/local/bin/npm && \
-    apk add --no-cache apache2-utils
+RUN apt-get update && \
+    apt-get install -y apache2-utils && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy our app from builder
-COPY --from=builder /app /app
-
-# copy the Prometheus configuration file
+# Copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
 
-# create web config file with basic auth
+# Create web config file with basic auth
 RUN mkdir -p /etc/prometheus/web
 COPY web.yml /etc/prometheus/web/web.yml
 
-# Install chrony for time sync
-RUN mkdir -p /etc/chrony && \
-    echo "pool pool.ntp.org iburst" > /etc/chrony/chrony.conf && \
-    echo "makestep 1.0 3" >> /etc/chrony/chrony.conf && \
-    echo "rtcsync" >> /etc/chrony/chrony.conf
+# Create a script to generate the password hash and start Prometheus
+RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
+    echo 'if [ -n "$ADMIN_PASSWORD" ]; then' >> /docker-entrypoint.sh && \
+    echo '    ADMIN_PASSWORD_HASH=$(htpasswd -nbB "" "$ADMIN_PASSWORD" | cut -d ":" -f 2)' >> /docker-entrypoint.sh && \
+    echo '    export ADMIN_PASSWORD_HASH' >> /docker-entrypoint.sh && \
+    echo 'fi' >> /docker-entrypoint.sh && \
+    echo 'exec /bin/prometheus \' >> /docker-entrypoint.sh && \
+    echo '  --config.file=/etc/prometheus/prometheus.yml \' >> /docker-entrypoint.sh && \
+    echo '  --storage.tsdb.path=/prometheus \' >> /docker-entrypoint.sh && \
+    echo '  --storage.tsdb.retention.time=365d \' >> /docker-entrypoint.sh && \
+    echo '  --web.console.libraries=/usr/share/prometheus/console_libraries \' >> /docker-entrypoint.sh && \
+    echo '  --web.console.templates=/usr/share/prometheus/consoles \' >> /docker-entrypoint.sh && \
+    echo '  --web.external-url=http://localhost:9090 \' >> /docker-entrypoint.sh && \
+    echo '  --web.config.file=/etc/prometheus/web/web.yml \' >> /docker-entrypoint.sh && \
+    echo '  --log.level=info' >> /docker-entrypoint.sh && \
+    chmod +x /docker-entrypoint.sh
 
 # expose the Prometheus server port
 EXPOSE 9090
 
-# Create startup script with proper permissions
-RUN echo '#!/bin/sh' > /start.sh && \
-    echo '# Start chronyd in the background if it exists' >> /start.sh && \
-    echo 'if command -v chronyd >/dev/null 2>&1; then' >> /start.sh && \
-    echo '    chronyd' >> /start.sh && \
-    echo 'fi' >> /start.sh && \
-    echo '' >> /start.sh && \
-    echo '# Generate password hash from environment variable' >> /start.sh && \
-    echo 'if [ -n "$ADMIN_PASSWORD" ]; then' >> /start.sh && \
-    echo '    ADMIN_PASSWORD_HASH=$(htpasswd -nbB "" "$ADMIN_PASSWORD" | cut -d ":" -f 2)' >> /start.sh && \
-    echo '    export ADMIN_PASSWORD_HASH' >> /start.sh && \
-    echo 'fi' >> /start.sh && \
-    echo '' >> /start.sh && \
-    echo '# Check if we are running a test data command' >> /start.sh && \
-    echo 'if [ "$1" = "seed" ]; then' >> /start.sh && \
-    echo '    node /app/manage_test_data.js seed' >> /start.sh && \
-    echo '    exit $?' >> /start.sh && \
-    echo 'elif [ "$1" = "update" ]; then' >> /start.sh && \
-    echo '    node /app/manage_test_data.js update' >> /start.sh && \
-    echo '    exit $?' >> /start.sh && \
-    echo 'elif [ "$1" = "rollback" ]; then' >> /start.sh && \
-    echo '    node /app/manage_test_data.js rollback' >> /start.sh && \
-    echo '    exit $?' >> /start.sh && \
-    echo 'elif [ "$1" = "status" ]; then' >> /start.sh && \
-    echo '    node /app/manage_test_data.js status' >> /start.sh && \
-    echo '    exit $?' >> /start.sh && \
-    echo 'fi' >> /start.sh && \
-    echo '' >> /start.sh && \
-    echo '# Start Prometheus by default' >> /start.sh && \
-    echo 'exec /bin/prometheus \' >> /start.sh && \
-    echo '  --config.file=/etc/prometheus/prometheus.yml \' >> /start.sh && \
-    echo '  --storage.tsdb.path=/prometheus \' >> /start.sh && \
-    echo '  --storage.tsdb.retention.time=365d \' >> /start.sh && \
-    echo '  --web.console.libraries=/usr/share/prometheus/console_libraries \' >> /start.sh && \
-    echo '  --web.console.templates=/usr/share/prometheus/consoles \' >> /start.sh && \
-    echo '  --web.external-url=http://localhost:9090 \' >> /start.sh && \
-    echo '  --web.config.file=/etc/prometheus/web/web.yml \' >> /start.sh && \
-    echo '  --log.level=info' >> /start.sh && \
-    chmod +x /start.sh
-
-# Set the entrypoint to our startup script
-ENTRYPOINT ["/start.sh"]
+# Set the entrypoint to our script
+ENTRYPOINT ["/docker-entrypoint.sh"]
  
