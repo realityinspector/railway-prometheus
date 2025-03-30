@@ -18,7 +18,8 @@ COPY --from=builder /usr/local/bin/node /usr/local/bin/
 COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN mkdir -p /usr/local/bin && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
-    chmod +x /usr/local/bin/npm
+    chmod +x /usr/local/bin/npm && \
+    apk add --no-cache apache2-utils
 
 # Copy our app from builder
 COPY --from=builder /app /app
@@ -46,6 +47,12 @@ RUN echo '#!/bin/sh' > /start.sh && \
     echo '    chronyd' >> /start.sh && \
     echo 'fi' >> /start.sh && \
     echo '' >> /start.sh && \
+    echo '# Generate password hash from environment variable' >> /start.sh && \
+    echo 'if [ -n "$ADMIN_PASSWORD" ]; then' >> /start.sh && \
+    echo '    ADMIN_PASSWORD_HASH=$(htpasswd -nbB "" "$ADMIN_PASSWORD" | cut -d ":" -f 2)' >> /start.sh && \
+    echo '    export ADMIN_PASSWORD_HASH' >> /start.sh && \
+    echo 'fi' >> /start.sh && \
+    echo '' >> /start.sh && \
     echo '# Check if we are running a test data command' >> /start.sh && \
     echo 'if [ "$1" = "seed" ]; then' >> /start.sh && \
     echo '    node /app/manage_test_data.js seed' >> /start.sh && \
@@ -62,14 +69,14 @@ RUN echo '#!/bin/sh' > /start.sh && \
     echo 'fi' >> /start.sh && \
     echo '' >> /start.sh && \
     echo '# Start Prometheus by default' >> /start.sh && \
-    echo 'exec /bin/prometheus \\' >> /start.sh && \
-    echo '  --config.file=/etc/prometheus/prometheus.yml \\' >> /start.sh && \
-    echo '  --storage.tsdb.path=/prometheus \\' >> /start.sh && \
-    echo '  --storage.tsdb.retention.time=365d \\' >> /start.sh && \
-    echo '  --web.console.libraries=/usr/share/prometheus/console_libraries \\' >> /start.sh && \
-    echo '  --web.console.templates=/usr/share/prometheus/consoles \\' >> /start.sh && \
-    echo '  --web.external-url=http://localhost:9090 \\' >> /start.sh && \
-    echo '  --web.config.file=/etc/prometheus/web/web.yml \\' >> /start.sh && \
+    echo 'exec /bin/prometheus \' >> /start.sh && \
+    echo '  --config.file=/etc/prometheus/prometheus.yml \' >> /start.sh && \
+    echo '  --storage.tsdb.path=/prometheus \' >> /start.sh && \
+    echo '  --storage.tsdb.retention.time=365d \' >> /start.sh && \
+    echo '  --web.console.libraries=/usr/share/prometheus/console_libraries \' >> /start.sh && \
+    echo '  --web.console.templates=/usr/share/prometheus/consoles \' >> /start.sh && \
+    echo '  --web.external-url=http://localhost:9090 \' >> /start.sh && \
+    echo '  --web.config.file=/etc/prometheus/web/web.yml \' >> /start.sh && \
     echo '  --log.level=info' >> /start.sh && \
     chmod +x /start.sh
 

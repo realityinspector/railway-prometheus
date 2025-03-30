@@ -1,2 +1,2 @@
 basic_auth_users:
-  admin: $2y$05$6myKw933gkcjZjXBy0yMBO8EPHj5U5SXyR9N2tZt9oYs2Iw132L8q
+  ${ADMIN_EMAIL}: ${ADMIN_PASSWORD_HASH}
