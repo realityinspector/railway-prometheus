@@ -1,2 +1,2 @@
 basic_auth_users:
-  ${ADMIN_EMAIL}: ${ADMIN_PASSWORD_HASH}
+  admin: ${ADMIN_PASSWORD_HASH}

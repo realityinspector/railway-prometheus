@@ -1,8 +1,12 @@
-FROM prom/prometheus
+# Stage 1: Generate password hash
+FROM httpd:2.4-alpine AS hash-generator
+ARG ADMIN_PASSWORD
+RUN if [ -n "$ADMIN_PASSWORD" ]; then \
+    echo "admin:$(htpasswd -nbB "" "$ADMIN_PASSWORD" | cut -d ":" -f 2)" > /tmp/htpasswd; \
+    fi
 
-# Install apache2-utils for htpasswd 
-USER root
-RUN apt-get update && apt-get install -y apache2-utils && rm -rf /var/lib/apt/lists/*
+# Stage 2: Main Prometheus image
+FROM prom/prometheus
 
 # Copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
@@ -11,12 +15,11 @@ COPY prometheus.yml /etc/prometheus/prometheus.yml
 RUN mkdir -p /etc/prometheus/web
 COPY web.yml /etc/prometheus/web/web.yml
 
-# Create a script to generate the password hash and start Prometheus
+# Copy the generated password hash if it exists
+COPY --from=hash-generator /tmp/htpasswd /etc/prometheus/web/htpasswd
+
+# Create a script to start Prometheus
 RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
-    echo 'if [ -n "$ADMIN_PASSWORD" ]; then' >> /docker-entrypoint.sh && \
-    echo '    ADMIN_PASSWORD_HASH=$(htpasswd -nbB "" "$ADMIN_PASSWORD" | cut -d ":" -f 2)' >> /docker-entrypoint.sh && \
-    echo '    export ADMIN_PASSWORD_HASH' >> /docker-entrypoint.sh && \
-    echo 'fi' >> /docker-entrypoint.sh && \
     echo 'exec /bin/prometheus \' >> /docker-entrypoint.sh && \
     echo '  --config.file=/etc/prometheus/prometheus.yml \' >> /docker-entrypoint.sh && \
     echo '  --storage.tsdb.path=/prometheus \' >> /docker-entrypoint.sh && \
