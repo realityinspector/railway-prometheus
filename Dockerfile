@@ -6,22 +6,23 @@ RUN if [ -n "$ADMIN_PASSWORD" ]; then \
     fi
 
 # Stage 2: Main Prometheus image
-FROM prom/prometheus
+FROM prom/prometheus:latest
 
-# Switch to root for file operations
+# Switch to root for setup
 USER root
 
-# Copy the Prometheus configuration file
+# Copy Prometheus config
 COPY prometheus.yml /etc/prometheus/prometheus.yml
 
-# Create web config file with basic auth
+# Basic auth config
 RUN mkdir -p /etc/prometheus/web
 COPY web.yml /etc/prometheus/web/web.yml
-
-# Copy the generated password hash if it exists
 COPY --from=hash-generator /tmp/htpasswd /etc/prometheus/web/htpasswd
 
-# Create a script to start Prometheus
+# Create the mmap-safe log file in /tmp
+RUN touch /tmp/queries.active && chmod 666 /tmp/queries.active
+
+# Start script to avoid problematic CLI flags
 RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
     echo 'exec /bin/prometheus \' >> /docker-entrypoint.sh && \
     echo '  --config.file=/etc/prometheus/prometheus.yml \' >> /docker-entrypoint.sh && \
@@ -30,17 +31,10 @@ RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
     echo '  --web.console.libraries=/usr/share/prometheus/console_libraries \' >> /docker-entrypoint.sh && \
     echo '  --web.console.templates=/usr/share/prometheus/consoles \' >> /docker-entrypoint.sh && \
     echo '  --web.external-url=http://localhost:9090 \' >> /docker-entrypoint.sh && \
-    echo '  --web.config.file=/etc/prometheus/web/web.yml \' >> /docker-entrypoint.sh && \
-    echo '  --query.active.query-log-file=/tmp/queries.active \' >> /docker-entrypoint.sh && \
-    echo '  --log.level=info' >> /docker-entrypoint.sh && \
+    echo '  --web.config.file=/etc/prometheus/web/web.yml' >> /docker-entrypoint.sh && \
     chmod +x /docker-entrypoint.sh
 
-# expose the Prometheus server port
 EXPOSE 9090
 
-# Switch back to the nobody user for better security
 USER nobody
-
-# Set the entrypoint to our script
 ENTRYPOINT ["/docker-entrypoint.sh"]
- 
