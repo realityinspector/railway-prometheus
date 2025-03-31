@@ -12,7 +12,7 @@ FROM prom/prometheus
 USER root
 
 # Create necessary directories and set permissions
-RUN mkdir -p /prometheus && \
+RUN mkdir -p /prometheus /prometheus/data && \
     chown -R nobody:nobody /prometheus && \
     chmod 777 /prometheus
 
@@ -28,9 +28,12 @@ COPY --from=hash-generator /tmp/htpasswd /etc/prometheus/web/htpasswd
 
 # Create a script to start Prometheus
 RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
+    echo 'mkdir -p /prometheus/data' >> /docker-entrypoint.sh && \
+    echo 'chown -R nobody:nobody /prometheus' >> /docker-entrypoint.sh && \
+    echo 'chmod 777 /prometheus' >> /docker-entrypoint.sh && \
     echo 'exec /bin/prometheus \' >> /docker-entrypoint.sh && \
     echo '  --config.file=/etc/prometheus/prometheus.yml \' >> /docker-entrypoint.sh && \
-    echo '  --storage.tsdb.path=/prometheus \' >> /docker-entrypoint.sh && \
+    echo '  --storage.tsdb.path=/prometheus/data \' >> /docker-entrypoint.sh && \
     echo '  --storage.tsdb.retention.time=365d \' >> /docker-entrypoint.sh && \
     echo '  --web.console.libraries=/usr/share/prometheus/console_libraries \' >> /docker-entrypoint.sh && \
     echo '  --web.console.templates=/usr/share/prometheus/consoles \' >> /docker-entrypoint.sh && \
