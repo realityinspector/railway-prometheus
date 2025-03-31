@@ -8,6 +8,9 @@ RUN if [ -n "$ADMIN_PASSWORD" ]; then \
 # Stage 2: Main Prometheus image
 FROM prom/prometheus
 
+# Switch to root for file operations
+USER root
+
 # Copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
 
@@ -33,6 +36,9 @@ RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
 
 # expose the Prometheus server port
 EXPOSE 9090
+
+# Switch back to the nobody user for better security
+USER nobody
 
 # Set the entrypoint to our script
 ENTRYPOINT ["/docker-entrypoint.sh"]
