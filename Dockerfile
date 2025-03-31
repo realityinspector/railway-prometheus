@@ -2,7 +2,7 @@ FROM prom/prometheus
 
 # Install apache2-utils for htpasswd
 USER root
-RUN apk add --no-cache apache2-utils
+RUN apt-get update && apt-get install -y apache2-utils && rm -rf /var/lib/apt/lists/*
 
 # Copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
