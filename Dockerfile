@@ -31,6 +31,7 @@ RUN echo '#!/bin/sh' > /docker-entrypoint.sh && \
     echo '  --web.console.templates=/usr/share/prometheus/consoles \' >> /docker-entrypoint.sh && \
     echo '  --web.external-url=http://localhost:9090 \' >> /docker-entrypoint.sh && \
     echo '  --web.config.file=/etc/prometheus/web/web.yml \' >> /docker-entrypoint.sh && \
+    echo '  --query.active.query-log-file=/tmp/queries.active \' >> /docker-entrypoint.sh && \
     echo '  --log.level=info' >> /docker-entrypoint.sh && \
     chmod +x /docker-entrypoint.sh
 
