@@ -11,6 +11,11 @@ FROM prom/prometheus
 # Switch to root for file operations
 USER root
 
+# Create necessary directories and set permissions
+RUN mkdir -p /prometheus && \
+    chown -R nobody:nobody /prometheus && \
+    chmod 777 /prometheus
+
 # Copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
 
