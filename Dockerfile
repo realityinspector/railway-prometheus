@@ -11,6 +11,13 @@ FROM prom/prometheus
 # Switch to root for file operations
 USER root
 
+# Create necessary directories and files with correct permissions
+RUN mkdir -p /prometheus && \
+    touch /prometheus/queries.active && \
+    chown -R nobody:nobody /prometheus && \
+    chmod 777 /prometheus && \
+    chmod 666 /prometheus/queries.active
+
 # Copy the Prometheus configuration file
 COPY prometheus.yml /etc/prometheus/prometheus.yml
 
